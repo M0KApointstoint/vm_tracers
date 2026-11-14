@@ -1,0 +1,14 @@
+# Simple Ubuntu VM for Lima. See README.md for usage.
+
+minimumLimaVersion: 2.0.0
+
+# Ubuntu 24.04 LTS, from the image list that ships with Lima
+base:
+- template:_images/ubuntu-24.04
+
+# Upper limit, not allocated upfront
+memory: 4GiB
+
+# Upper limit; the disk file on the host starts small and grows on demand
+disk: 60GiB
+
