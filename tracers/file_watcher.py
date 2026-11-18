@@ -4,6 +4,7 @@
 import argparse
 import ctypes
 import os
+import stat
 import struct
 import sys
 
@@ -18,6 +19,42 @@ IN_DELETE = 0x00000200  # file was deleted
 
 # Every event starts with a fixed header: wd, mask, cookie, len.
 EVENT_HEADER = struct.Struct("iIII")
+
+def read_info(path):
+    """Return (size, mode) of a file, or None if it no longer exists."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return st.st_size, st.st_mode
+
+def format_mode(mode):
+    """Format permissions as both octal and symbolic, e.g. '644 (rw-r--r--)'."""
+    return f"{stat.S_IMODE(mode):03o} ({stat.filemode(mode)[1:]})"
+
+def handle_event(files, directory, event_mask, name):
+    """Compare the file with what we remember and print what changed."""
+    old = files.get(name)
+
+    if event_mask & IN_DELETE:
+        files.pop(name, None)
+        print(f"deleted      {name}")
+        return
+
+    new = read_info(os.path.join(directory, name))
+    if new is None:
+        return  # already gone; the delete event will follow
+    files[name] = new
+
+    if event_mask & IN_CREATE:
+        print(f"created      {name}")
+    elif old is not None:
+        old_size, old_mode = old
+        new_size, new_mode = new
+        if new_size != old_size:
+            print(f"size         {name}: {old_size} -> {new_size} bytes")
+        if stat.S_IMODE(new_mode) != stat.S_IMODE(old_mode):
+            print(f"permissions  {name}: {format_mode(old_mode)} -> {format_mode(new_mode)}")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -41,6 +78,13 @@ def main():
     if wd < 0:
         sys.exit(f"Error: inotify_add_watch: {os.strerror(ctypes.get_errno())}")
 
+    # Remember the size and permissions of the files that already exist.
+    files = {}
+    for entry in os.scandir(args.directory):
+        info = read_info(entry.path)
+        if info is not None:
+            files[entry.name] = info
+
     print(f"Watching {args.directory} (press Ctrl+C to stop)")
     try:
         while True:
@@ -52,15 +96,7 @@ def main():
                 offset += EVENT_HEADER.size
                 name = data[offset:offset + name_len].rstrip(b"\0").decode(errors="replace")
                 offset += name_len
-
-                if event_mask & IN_CREATE:
-                    print(f"created   {name}")
-                if event_mask & IN_DELETE:
-                    print(f"deleted   {name}")
-                if event_mask & IN_MODIFY:
-                    print(f"modified  {name}")
-                if event_mask & IN_ATTRIB:
-                    print(f"attribute {name}")
+                handle_event(files, args.directory, event_mask, name)
     except KeyboardInterrupt:
         pass
     finally:
