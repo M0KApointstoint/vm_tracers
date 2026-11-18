@@ -20,7 +20,10 @@ IN_DELETE = 0x00000200  # file was deleted
 # Every event starts with a fixed header: wd, mask, cookie, len.
 EVENT_HEADER = struct.Struct("iIII")
 
-def read_info(path):
+# What we remember about each file: (size in bytes, mode).
+FileInfo = tuple[int, int]
+
+def read_info(path: str) -> FileInfo | None:
     """Return (size, mode) of a file, or None if it no longer exists."""
     try:
         st = os.lstat(path)
@@ -28,11 +31,11 @@ def read_info(path):
         return None
     return st.st_size, st.st_mode
 
-def format_mode(mode):
+def format_mode(mode: int) -> str:
     """Format permissions as both octal and symbolic, e.g. '644 (rw-r--r--)'."""
     return f"{stat.S_IMODE(mode):03o} ({stat.filemode(mode)[1:]})"
 
-def handle_event(files, directory, event_mask, name):
+def handle_event(files: dict[str, FileInfo], directory: str, event_mask: int, name: str) -> None:
     """Compare the file with what we remember and print what changed."""
     old = files.get(name)
 
@@ -56,7 +59,7 @@ def handle_event(files, directory, event_mask, name):
         if stat.S_IMODE(new_mode) != stat.S_IMODE(old_mode):
             print(f"permissions  {name}: {format_mode(old_mode)} -> {format_mode(new_mode)}")
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__,
         usage="%(prog)s [-h | --help] directory",
@@ -79,7 +82,7 @@ def main():
         sys.exit(f"Error: inotify_add_watch: {os.strerror(ctypes.get_errno())}")
 
     # Remember the size and permissions of the files that already exist.
-    files = {}
+    files: dict[str, FileInfo] = {}
     for entry in os.scandir(args.directory):
         info = read_info(entry.path)
         if info is not None:
