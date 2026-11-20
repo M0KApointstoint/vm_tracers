@@ -11,7 +11,7 @@ import sys
 #  With None we use the libc already loaded into Python (glibc, musl).
 libc: ctypes.CDLL = ctypes.CDLL(None, use_errno=True)
 
-# Event types, with the values from the kernel header <sys/inotify.h>.
+# Event types, with the values from the kernel header <linux/inotify.h>.
 IN_MODIFY = 0x00000002  # file content was written
 IN_ATTRIB = 0x00000004  # metadata changed (permissions, owner, ...)
 IN_MOVED_FROM = 0x00000040  # file was moved away (renamed or moved out)
