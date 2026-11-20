@@ -5,7 +5,6 @@ import argparse
 import ctypes
 import os
 import stat
-import struct
 import sys
 
 # The C standard library, where the inotify functions live.
@@ -19,8 +18,15 @@ IN_MOVED_TO = 0x00000080  # file was moved in (renamed or moved here)
 IN_CREATE = 0x00000100  # file was created
 IN_DELETE = 0x00000200  # file was deleted
 
-# Every event starts with a fixed header: wd, mask, cookie, len.
-EVENT_HEADER = struct.Struct("iIII")
+# Header of every event, as defined by "struct inotify_event" in inotify(7).
+# The file name follows it, padded with zero bytes to "len" bytes.
+class InotifyEvent(ctypes.Structure):
+    _fields_ = [
+        ("wd", ctypes.c_int),
+        ("mask", ctypes.c_uint32),
+        ("cookie", ctypes.c_uint32),
+        ("len", ctypes.c_uint32),
+    ]
 
 # What we remember about each file: (size in bytes, mode).
 FileInfo = tuple[int, int]
@@ -110,11 +116,11 @@ def main() -> None:
             data: bytes = os.read(fd, 4096)
             offset: int = 0
             while offset < len(data):
-                _, event_mask, _, name_len = EVENT_HEADER.unpack_from(data, offset)
-                offset += EVENT_HEADER.size
-                name: str = data[offset:offset + name_len].rstrip(b"\0").decode(errors="replace")
-                offset += name_len
-                handle_event(files, args.directory, event_mask, name)
+                event: InotifyEvent = InotifyEvent.from_buffer_copy(data, offset)
+                offset += ctypes.sizeof(InotifyEvent)
+                name: str = data[offset:offset + event.len].rstrip(b"\0").decode(errors="replace")
+                offset += event.len
+                handle_event(files, args.directory, event.mask, name)
     except KeyboardInterrupt:
         pass
     finally:
