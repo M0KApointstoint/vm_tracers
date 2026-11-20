@@ -8,7 +8,8 @@ import stat
 import sys
 
 # The C standard library, where the inotify functions live.
-libc: ctypes.CDLL = ctypes.CDLL("libc.so.6", use_errno=True)
+#  With None we use the libc already loaded into Python (glibc, musl).
+libc: ctypes.CDLL = ctypes.CDLL(None, use_errno=True)
 
 # Event types, with the values from the kernel header <sys/inotify.h>.
 IN_MODIFY = 0x00000002  # file content was written
