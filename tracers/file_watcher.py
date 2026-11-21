@@ -121,6 +121,10 @@ def main() -> None:
                 offset += ctypes.sizeof(InotifyEvent)
                 name: str = data[offset:offset + event.len].rstrip(b"\0").decode(errors="replace")
                 offset += event.len
+                # An event about the watched directory itself, with no name,
+                # not about a file inside it.
+                if not name:
+                    continue
                 handle_event(files, args.directory, event.mask, name)
     except KeyboardInterrupt:
         pass
