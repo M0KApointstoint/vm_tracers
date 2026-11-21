@@ -112,9 +112,12 @@ $ rm -rf /tmp/test_watch /tmp/sub
   $ cat /proc/sys/fs/inotify/max_user_watches
   ```
 
-  A subdirectory that cannot be watched, because the limit is reached or
-  because it cannot be read, is reported with a warning, and changes
-  inside it are not reported. For example:
+  **What the watcher does when the limit is reached has not been tested
+  yet. Testing it means lowering the limit for the whole system, which
+  also affects other programs, so it should be done in a VM.**
+- A subdirectory that cannot be read is reported with a warning, and
+  changes inside it are not reported, even if its permissions are changed
+  later. For example:
 
   ```console
   Warning: cannot watch /tmp/test_watch/locked: Permission denied
