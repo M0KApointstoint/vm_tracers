@@ -105,6 +105,41 @@ $ rm -rf /tmp/test_watch /tmp/sub
   it is not reported either. After a rename or a move, new files are still
   listed, but size and permission changes are not, and new subdirectories
   are not watched. Restart the watcher in that case.
+
+  To reproduce it, in terminal 1, from `~/vm_tracers/tracers`:
+
+  ```console
+  $ rm -rf /tmp/test_watch /tmp/test_renamed
+  $ mkdir /tmp/test_watch
+  $ ./file_watcher.py /tmp/test_watch
+  ```
+
+  In terminal 2:
+
+  ```console
+  $ chmod 700 /tmp/test_watch
+  $ chmod 755 /tmp/test_watch
+  $ mv /tmp/test_watch /tmp/test_renamed
+  $ cd /tmp/test_renamed
+  $ echo hi > a.txt
+  $ chmod 700 a.txt
+  $ mkdir new
+  $ touch new/b.txt
+  ```
+
+  Terminal 1 shows only:
+
+  ```console
+  created      a.txt
+  created      new
+  ```
+
+  Then stop the watcher with Ctrl+C and, in terminal 2, clean up:
+
+  ```console
+  $ cd ~
+  $ rm -rf /tmp/test_renamed
+  ```
 - Each subdirectory needs its own inotify watch, and the kernel limits how
   many watches a user can have. To see the limit on your machine:
 
@@ -117,16 +152,79 @@ $ rm -rf /tmp/test_watch /tmp/sub
   also affects other programs, so it should be done in a VM.**
 - A subdirectory that cannot be read is reported with a warning, and
   changes inside it are not reported, even if its permissions are changed
-  later. For example:
+  later. To reproduce it, as a normal user (root can read any directory),
+  from `~/vm_tracers/tracers`:
 
   ```console
+  $ rm -rf /tmp/test_watch
+  $ mkdir -p /tmp/test_watch/locked
+  $ chmod 000 /tmp/test_watch/locked
+  $ ./file_watcher.py /tmp/test_watch
   Warning: cannot watch /tmp/test_watch/locked: Permission denied
+  Watching /tmp/test_watch (press Ctrl+C to stop)
+  ```
+
+  Then stop the watcher with Ctrl+C and clean up:
+
+  ```console
+  $ rm -rf /tmp/test_watch
   ```
 - A new subdirectory is watched only after the watcher sees it appear, and
   then it is listed. A file created and deleted inside it before that is
-  not reported.
+  not reported. This usually takes very little time, so to reproduce it
+  the watcher is paused while the files are changed. In one terminal, from
+  `~/vm_tracers/tracers`:
+
+  ```console
+  $ rm -rf /tmp/test_watch
+  $ mkdir /tmp/test_watch
+  $ ./file_watcher.py /tmp/test_watch > /tmp/watch.log &
+  $ watcher=$!
+  $ kill -STOP $watcher
+  $ mkdir /tmp/test_watch/new
+  $ touch /tmp/test_watch/new/quick.txt
+  $ rm /tmp/test_watch/new/quick.txt
+  $ touch /tmp/test_watch/new/kept.txt
+  $ kill -CONT $watcher
+  $ sleep 2
+  $ kill -INT $watcher
+  ```
+
+  The shell prints job status lines such as `[1]+  Stopped`; they are
+  expected. `quick.txt` is missing from the output, while `kept.txt`,
+  which still exists when the watcher lists `new`, is reported:
+
+  ```console
+  $ cat /tmp/watch.log
+  Watching /tmp/test_watch (press Ctrl+C to stop)
+  created      new
+  created      new/kept.txt
+  [1]+  Done                       ./file_watcher.py /tmp/test_watch > /tmp/watch.log
+  $ rm -rf /tmp/test_watch /tmp/watch.log
+  ```
 - Symbolic links to directories are reported like files; the directories
-  they point to are not watched.
+  they point to are not watched. To reproduce it, in terminal 1, from
+  `~/vm_tracers/tracers`:
+
+  ```console
+  $ rm -rf /tmp/test_watch /tmp/test_target
+  $ mkdir /tmp/test_watch /tmp/test_target
+  $ ./file_watcher.py /tmp/test_watch
+  ```
+
+  In terminal 2:
+
+  ```console
+  $ ln -s /tmp/test_target /tmp/test_watch/link
+  $ touch /tmp/test_watch/link/x.txt
+  ```
+
+  Terminal 1 shows only `created      link`, not `x.txt`. Then stop the
+  watcher with Ctrl+C and clean up:
+
+  ```console
+  $ rm -rf /tmp/test_watch /tmp/test_target
+  ```
 - The size and permissions are read when an event is handled, not when the
   change happened, so changes made in quick succession can be merged into
   one line. For example, from `/tmp/test_watch`:
