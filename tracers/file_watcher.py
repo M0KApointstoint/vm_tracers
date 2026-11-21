@@ -8,7 +8,7 @@ import stat
 import sys
 
 # The C standard library, where the inotify functions live.
-#  With None we use the libc already loaded into Python (glibc, musl).
+# With None we use the libc already loaded into Python (glibc, musl).
 libc: ctypes.CDLL = ctypes.CDLL(None, use_errno=True)
 
 # Event types, with the values from the kernel header <linux/inotify.h>.
@@ -18,7 +18,7 @@ IN_MOVED_FROM = 0x00000040  # file was moved away (renamed or moved out)
 IN_MOVED_TO = 0x00000080  # file was moved in (renamed or moved here)
 IN_CREATE = 0x00000100  # file was created
 IN_DELETE = 0x00000200  # file was deleted
-IN_IGNORED = 0x00008000  # watch was removed (directory deleted)
+IN_IGNORED = 0x00008000  # watch was removed (directory deleted, or by us)
 
 # Options for inotify_add_watch, from the same header.
 IN_ONLYDIR = 0x01000000  # fail if the path is not a directory
@@ -82,18 +82,37 @@ def watch_directory(fd: int, watches: dict[int, str], files: dict[str, FileInfo]
     watches[wd] = directory
     scan_directory(fd, watches, files, root, directory)
 
-def handle_event(files: dict[str, FileInfo], root: str, event_mask: int, name: str) -> None:
+def forget_directory(fd: int, watches: dict[int, str], files: dict[str, FileInfo],
+                     directory: str, verb: str | None) -> None:
+    """Stop watching a directory that left, and forget everything inside it.
+
+    With a verb ("moved away"), also print each file that was inside it.
+    """
+    prefix: str = directory + "/"
+    for wd, watched in list(watches.items()):
+        if watched == directory or watched.startswith(prefix):
+            libc.inotify_rm_watch(fd, wd)
+            del watches[wd]
+    for path in [path for path in files if path.startswith(prefix)]:
+        del files[path]
+        if verb is not None:
+            print(f"{verb:<12} {path}")
+
+def handle_event(fd: int, watches: dict[int, str], files: dict[str, FileInfo],
+                 root: str, event_mask: int, name: str) -> None:
     """Compare the file with what we remember and print what changed."""
     old: FileInfo | None = files.get(name)
 
     if event_mask & IN_DELETE:
         files.pop(name, None)
         print(f"deleted      {name}")
+        forget_directory(fd, watches, files, name, None)
         return
 
     if event_mask & IN_MOVED_FROM:
         files.pop(name, None)
         print(f"moved away   {name}")
+        forget_directory(fd, watches, files, name, "moved away")
         return
 
     # A new name in the directory: report it before looking at the file.
@@ -160,15 +179,18 @@ def main() -> None:
                 offset += ctypes.sizeof(InotifyEvent)
                 name: str = data[offset:offset + event.len].rstrip(b"\0").decode(errors="replace")
                 offset += event.len
-                # The watch is gone, because its directory was deleted.
+                # The watch is gone: its directory was deleted, or we removed it.
                 if event.mask & IN_IGNORED:
                     watches.pop(event.wd, None)
+                    continue
+                # An event from a watch we already removed.
+                if event.wd not in watches:
                     continue
                 # No name: the change is to a watched directory itself, not to a
                 # file in it. For a subdirectory, its parent reports it by name.
                 if not name:
                     continue
-                handle_event(files, args.directory, event.mask,
+                handle_event(fd, watches, files, args.directory, event.mask,
                              os.path.join(watches[event.wd], name))
     except KeyboardInterrupt:
         pass
