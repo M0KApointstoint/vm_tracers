@@ -52,6 +52,36 @@ def format_mode(mode: int) -> str:
     """Format permissions as both octal and symbolic, e.g. '644 (rw-r--r--)'."""
     return f"{stat.S_IMODE(mode):03o} ({stat.filemode(mode)[1:]})"
 
+def scan_directory(fd: int, watches: dict[int, str], files: dict[str, FileInfo],
+                   root: str, directory: str) -> None:
+    """Remember the files in a watched directory and watch its subdirectories."""
+    try:
+        entries: list[os.DirEntry[str]] = list(os.scandir(os.path.join(root, directory)))
+    except OSError:
+        return  # already gone, or not readable
+    for entry in entries:
+        path: str = os.path.join(directory, entry.name)
+        info: FileInfo | None = read_info(entry.path)
+        if info is None:
+            continue
+        files[path] = info
+        if stat.S_ISDIR(info[1]):
+            watch_directory(fd, watches, files, root, path)
+
+def watch_directory(fd: int, watches: dict[int, str], files: dict[str, FileInfo],
+                    root: str, directory: str) -> None:
+    """Watch a subdirectory, then everything inside it."""
+    # Only a real directory: the path may have been replaced by a symbolic
+    # link or a file since we looked at it.
+    wd: int = libc.inotify_add_watch(fd, os.fsencode(os.path.join(root, directory)),
+                                     EVENTS | IN_ONLYDIR | IN_DONT_FOLLOW)
+    if wd < 0:
+        print(f"Warning: cannot watch {os.path.join(root, directory)}: "
+              f"{os.strerror(ctypes.get_errno())}", file=sys.stderr)
+        return
+    watches[wd] = directory
+    scan_directory(fd, watches, files, root, directory)
+
 def handle_event(files: dict[str, FileInfo], directory: str, event_mask: int, name: str) -> None:
     """Compare the file with what we remember and print what changed."""
     old: FileInfo | None = files.get(name)
