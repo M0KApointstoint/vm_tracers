@@ -18,6 +18,14 @@ IN_MOVED_FROM = 0x00000040  # file was moved away (renamed or moved out)
 IN_MOVED_TO = 0x00000080  # file was moved in (renamed or moved here)
 IN_CREATE = 0x00000100  # file was created
 IN_DELETE = 0x00000200  # file was deleted
+IN_IGNORED = 0x00008000  # watch was removed (directory deleted)
+
+# Options for inotify_add_watch, from the same header.
+IN_ONLYDIR = 0x01000000  # fail if the path is not a directory
+IN_DONT_FOLLOW = 0x02000000  # do not follow the path if it is a symbolic link
+
+# The events we want from every watched directory.
+EVENTS = IN_CREATE | IN_DELETE | IN_MODIFY | IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO
 
 # Header of every event, as defined by "struct inotify_event" in inotify(7).
 # The file name follows it, padded with zero bytes to "len" bytes.
@@ -98,8 +106,7 @@ def main() -> None:
         sys.exit(f"Error: inotify_init: {os.strerror(ctypes.get_errno())}")
 
     # Tell the kernel which directory to watch and which events we want.
-    mask: int = IN_CREATE | IN_DELETE | IN_MODIFY | IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO
-    wd: int = libc.inotify_add_watch(fd, os.fsencode(args.directory), mask)
+    wd: int = libc.inotify_add_watch(fd, os.fsencode(args.directory), EVENTS)
     if wd < 0:
         sys.exit(f"Error: inotify_add_watch: {os.strerror(ctypes.get_errno())}")
 
@@ -121,8 +128,7 @@ def main() -> None:
                 offset += ctypes.sizeof(InotifyEvent)
                 name: str = data[offset:offset + event.len].rstrip(b"\0").decode(errors="replace")
                 offset += event.len
-                # An event about the watched directory itself, with no name,
-                # not about a file inside it.
+                # An event about the watched directory itself, with no name, not about a file inside it.
                 if not name:
                     continue
                 handle_event(files, args.directory, event.mask, name)
