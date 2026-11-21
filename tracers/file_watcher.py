@@ -53,23 +53,31 @@ def format_mode(mode: int) -> str:
     return f"{stat.S_IMODE(mode):03o} ({stat.filemode(mode)[1:]})"
 
 def scan_directory(fd: int, watches: dict[int, str], files: dict[str, FileInfo],
-                   root: str, directory: str) -> None:
-    """Remember the files in a watched directory and watch its subdirectories."""
+                   root: str, directory: str, verb: str | None) -> None:
+    """Remember the files in a watched directory and watch its subdirectories.
+
+    With a verb ("created", "moved in"), also print each file found: the kernel
+    reports only the directory itself, not what was already inside it.
+    """
     try:
         entries: list[os.DirEntry[str]] = list(os.scandir(os.path.join(root, directory)))
     except OSError:
         return  # already gone, or not readable
     for entry in entries:
         path: str = os.path.join(directory, entry.name)
+        if path in files:
+            continue  # already reported by its own event
         info: FileInfo | None = read_info(entry.path)
         if info is None:
             continue
         files[path] = info
+        if verb is not None:
+            print(f"{verb:<12} {path}")
         if stat.S_ISDIR(info[1]):
-            watch_directory(fd, watches, files, root, path)
+            watch_directory(fd, watches, files, root, path, verb)
 
 def watch_directory(fd: int, watches: dict[int, str], files: dict[str, FileInfo],
-                    root: str, directory: str) -> None:
+                    root: str, directory: str, verb: str | None) -> None:
     """Watch a subdirectory, then everything inside it."""
     # Only a real directory: the path may have been replaced by a symbolic
     # link or a file since we looked at it.
@@ -80,7 +88,7 @@ def watch_directory(fd: int, watches: dict[int, str], files: dict[str, FileInfo]
               f"{os.strerror(ctypes.get_errno())}", file=sys.stderr)
         return
     watches[wd] = directory
-    scan_directory(fd, watches, files, root, directory)
+    scan_directory(fd, watches, files, root, directory, verb)
 
 def forget_directory(fd: int, watches: dict[int, str], files: dict[str, FileInfo],
                      directory: str, verb: str | None) -> None:
@@ -118,6 +126,8 @@ def handle_event(fd: int, watches: dict[int, str], files: dict[str, FileInfo],
     # A new name in the directory: report it before looking at the file.
     # Therefore it is printed even if the file disappears right away.
     if event_mask & IN_CREATE:
+        if old is not None:
+            return  # already found when its parent directory was scanned
         print(f"created      {name}")
     elif event_mask & IN_MOVED_TO:
         print(f"moved in     {name}")
@@ -126,6 +136,11 @@ def handle_event(fd: int, watches: dict[int, str], files: dict[str, FileInfo],
     if new is None:
         return  # already gone; the delete or move event will follow
     files[name] = new
+
+    # A new directory: watch it too, and report what is already inside it.
+    if event_mask & (IN_CREATE | IN_MOVED_TO) and stat.S_ISDIR(new[1]):
+        verb: str = "created" if event_mask & IN_CREATE else "moved in"
+        watch_directory(fd, watches, files, root, name, verb)
 
     # Nothing to compare with for a new name, or a file we did not know.
     if event_mask & (IN_CREATE | IN_MOVED_TO) or old is None:
@@ -166,7 +181,7 @@ def main() -> None:
     # Remember the size and permissions of the files that already exist,
     # and watch every subdirectory.
     files: dict[str, FileInfo] = {}
-    scan_directory(fd, watches, files, args.directory, "")
+    scan_directory(fd, watches, files, args.directory, "", None)
 
     print(f"Watching {args.directory} (press Ctrl+C to stop)")
     try:
