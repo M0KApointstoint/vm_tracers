@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Watch a directory and print file changes line by line."""
+"""Watch a directory and its subdirectories and print file changes line by line."""
 
 import argparse
 import ctypes
@@ -82,7 +82,7 @@ def watch_directory(fd: int, watches: dict[int, str], files: dict[str, FileInfo]
     watches[wd] = directory
     scan_directory(fd, watches, files, root, directory)
 
-def handle_event(files: dict[str, FileInfo], directory: str, event_mask: int, name: str) -> None:
+def handle_event(files: dict[str, FileInfo], root: str, event_mask: int, name: str) -> None:
     """Compare the file with what we remember and print what changed."""
     old: FileInfo | None = files.get(name)
 
@@ -103,7 +103,7 @@ def handle_event(files: dict[str, FileInfo], directory: str, event_mask: int, na
     elif event_mask & IN_MOVED_TO:
         print(f"moved in     {name}")
 
-    new: FileInfo | None = read_info(os.path.join(directory, name))
+    new: FileInfo | None = read_info(os.path.join(root, name))
     if new is None:
         return  # already gone; the delete or move event will follow
     files[name] = new
@@ -140,12 +140,14 @@ def main() -> None:
     if wd < 0:
         sys.exit(f"Error: inotify_add_watch: {os.strerror(ctypes.get_errno())}")
 
-    # Remember the size and permissions of the files that already exist.
+    # Each watch reports file names relative to its own directory, so remember
+    # which directory, relative to the one we were given, each watch is for.
+    watches: dict[int, str] = {wd: ""}
+
+    # Remember the size and permissions of the files that already exist,
+    # and watch every subdirectory.
     files: dict[str, FileInfo] = {}
-    for entry in os.scandir(args.directory):
-        info: FileInfo | None = read_info(entry.path)
-        if info is not None:
-            files[entry.name] = info
+    scan_directory(fd, watches, files, args.directory, "")
 
     print(f"Watching {args.directory} (press Ctrl+C to stop)")
     try:
@@ -158,10 +160,16 @@ def main() -> None:
                 offset += ctypes.sizeof(InotifyEvent)
                 name: str = data[offset:offset + event.len].rstrip(b"\0").decode(errors="replace")
                 offset += event.len
-                # An event about the watched directory itself, with no name, not about a file inside it.
+                # The watch is gone, because its directory was deleted.
+                if event.mask & IN_IGNORED:
+                    watches.pop(event.wd, None)
+                    continue
+                # No name: the change is to a watched directory itself, not to a
+                # file in it. For a subdirectory, its parent reports it by name.
                 if not name:
                     continue
-                handle_event(files, args.directory, event.mask, name)
+                handle_event(files, args.directory, event.mask,
+                             os.path.join(watches[event.wd], name))
     except KeyboardInterrupt:
         pass
     finally:
